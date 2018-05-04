@@ -1,105 +1,51 @@
 
 #include <ESP8266WiFi.h>
 #include <FirebaseArduino.h>
-#include <Wire.h>
 #include "SSD1306.h"
 #include "OLEDDisplayUi.h"
 #include "DHT.h"
-#include <time.h>
-#include <math.h>
+#include <EEPROM.h>
+
 // Set Server and Firebase
-#define DHTPIN D3
-#define DHTTYPE DHT21
 #define FIREBASE_HOST "veckenz-smartfarm.firebaseio.com"
 #define FIREBASE_AUTH "bRs74l5xbjNeGTu9lSwmHsMRuVigjQE7rtHkkA9o"
-#define WIFI_SSID "HELLO_WORLD"
-#define WIFI_PASSWORD "kimuchi999"
-
-// initial Icon
-#include "temp.h"
-
-// intial variable
-
-byte setting = 0;
+#define WIFI_SSID "F1"
+#define WIFI_PASSWORD "12345678"
+#define DHTPIN D3
+#define DHTTYPE DHT21
 
 // D0 -> SDA
 // D1 -> SCL
 SSD1306 display(0x3c, D1, D2);
 // dht sensor
 DHT dht(DHTPIN, DHTTYPE);
-// keypad set up
-//const int buttonPin[] = {D4, D5, D6, D7};
-//const int btn1 = D5;
-//const int btn2 = D4;
-//const int btn3 = D7;
-//const int btn4 = D6;
-//int buttonState = 0;
-//int start = 1;
 
 // Relay setup
 const int relayCH1 = D6;
 const int relayCH2 = D7;
 
-// timezone
-int timezone = 7;
-int dst = 0;
-int count = 0;
-struct tm *p_tm;
-boolean internetSetup = true;
+// internet
 boolean online = false;
 boolean setupDisplay = true;
-boolean reConnect = false;
+boolean setupFirebase = true;
+
+int timeMonitor = 3;
+
 // time rotate
-const int timeRotate = 7200;
+int timeRotate = 7200;
 int timeHoldRotate = 0;
 
 // temperature
-const int tempMin = 37.5;
-const int tempMax = 39;
-void wifiConnect()
-{
-  // Initial Server
-  int countTime = 0;
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  drawSetUp("connecting");
-  delay(1000);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    if (countTime >= 30)
-    {
-      offlineMode();
-    }
-    else
-    {
-      if (countTime % 3 == 0)
-      {
-        drawSetUp(".");
-      }
-      else if (countTime % 3 == 1)
-      {
-        drawSetUp("..");
-      }
-      else if (countTime % 3 == 2)
-      {
-        drawSetUp("...");
-      }
-      else
-      {
-        drawSetUp("....");
-      }
-      countTime++;
-      delay(1000);
-    }
-  }
-  drawSetUp("Connected");
-  Serial.println(WiFi.localIP());
-  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
-  internetSetup = false;
-  delay(1000);
-}
+float tempMin = 37.5;
+float tempMax = 39;
+float humduty = 0;
+  float temp = 0;
+// EEPROM
+int EEaddress = 0;
 
 void setup()
 {
+  EEPROM.begin(32);
   pinMode(relayCH1, OUTPUT);
   pinMode(relayCH2, OUTPUT);
   // Initialising the UI will init the display too.
@@ -109,62 +55,47 @@ void setup()
 
   // Initial Pin Deley out
   pinMode(relayCH1, OUTPUT);
-
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   dht.begin();
-  // wifiConnect();
-  delay(2000);
+   readData();
+    digitalWrite(relayCH1, HIGH);
+    digitalWrite(relayCH2, HIGH);
+    drawSetUp("SETUP");
+    delay(3000);
 }
 
 void loop()
 {
-  //  if(WiFi.status() != WL_CONNECTED){
-  //    WiFi.
-  //  } else {
-  //   onlineMode();
-  //  }
-
-  autoMode();
+  wConnect();
 }
 
-void autoMode()
-{
-  if (setupDisplay)
-  {
-    drawSetUp("AUTO");
-    delay(3000);
-    digitalWrite(relayCH1, HIGH);
-    digitalWrite(relayCH2, HIGH);
-    setupDisplay = false;
-  }
-  drawMainDisplay();
+void wConnect() {
+    if(WiFi.status() != WL_CONNECTED) {
+      setupFirebase = true;
+      offlineMode();
+    } else {
+      if(setupFirebase){
+        Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+        setupFirebase = false;
+        // readDatabase();
+      }
+      onlineMode();
+    } 
+   timeHoldRotate++;
+   delay(1000);
 }
 
 void onlineMode()
 {
-  if (setupDisplay)
-  {
-    drawSetUp("Online");
-    delay(3000);
-    setupDisplay = false;
-  }
-  online = true;
   drawMainDisplay();
+  if (WiFi.status() == WL_CONNECTED && timeHoldRotate % timeMonitor == 0) {
+      writeDatabase(temp,humduty); 
+      checkController();
+  }
 }
 
 void offlineMode()
 {
-  if (setupDisplay)
-  {
-    drawSetUp("Offline");
-    delay(3000);
-    setupDisplay = false;
-  }
-  if (WiFi.status() != WL_CONNECTED)
-  {
-    wifiConnect();
-  }
-  // reConnectWifi();
-  online = false;
   drawMainDisplay();
 }
 
@@ -181,8 +112,8 @@ void drawSetUp(char msg[])
 void drawMainDisplay()
 {
   display.clear();
-  float humduty = dht.readHumidity();
-  float temp = dht.readTemperature();
+  humduty = dht.readHumidity();
+  temp = dht.readTemperature();
   int seconds =  (timeRotate - timeHoldRotate) % 60 ;  
   int minutes =  (timeRotate - timeHoldRotate) / 60;
   int hours = minutes / 60;
@@ -191,10 +122,32 @@ void drawMainDisplay()
   display.setFont(ArialMT_Plain_16);
   display.drawString(64, 0, String(hours) + "H " + String(minutes) + "M " + String(seconds) + "S");
   display.drawString(64, 22, String(temp) + " C");
-  display.drawString(64, 44, String(humduty) + " %");
+  display.drawString(64, 44, String(humduty) + " % " + String( WiFi.status() == WL_CONNECTED ? "Online":"Offline"));
   display.display();
-  timeHoldRotate++;
-  delay(1000);
+  writeData();
+}
+
+void checkController()
+{
+  if(WiFi.status() == WL_CONNECTED){
+    boolean check = Firebase.getBool("setting/contact/changeData");
+    if (check) {
+      check = false;
+      tempMin = Firebase.getFloat("setting/tempmin/");
+      tempMax = Firebase.getFloat("setting/tempmax/");
+      timeRotate = Firebase.getInt("setting/rotate/") * 3600;
+      if (tempMin == 0 || tempMax == 0 || timeRotate == 0) {
+        readData();
+      } else {
+        timeHoldRotate = 0;
+        Firebase.setBool("setting/contact/changeData", false);
+        display.clear();
+        display.drawString(64, 22, String("Update"));
+        display.display();
+        delay(2000); 
+      }
+    } 
+   } 
 }
 
 void control(float temp, float humduty)
@@ -226,3 +179,33 @@ void rotate()
     digitalWrite(relayCH2, HIGH);
   }
 }
+
+void writeDatabase(float temp, float humduty) {
+  Firebase.setFloat("display/temperature/", temp);
+  Firebase.setFloat("display/humduty/", humduty);
+}
+
+void readDatabase () {
+   tempMin = Firebase.getFloat("setting/tempmin/");
+   tempMax = Firebase.getFloat("setting/tempmax/");
+   timeRotate = Firebase.getInt("setting/rotate/") * 3600;
+}
+
+void writeData() {
+ EEPROM.put(EEaddress, timeHoldRotate);
+ EEPROM.put(EEaddress + 4, timeRotate);
+ EEPROM.put(EEaddress + 8, tempMin);
+ EEPROM.put(EEaddress + 12, tempMax);
+ EEPROM.commit();
+}
+
+void readData() {
+  Serial.print("EEPROM contents at Address=0 is  : ");
+  timeHoldRotate = 0;
+  EEPROM.get(EEaddress,timeHoldRotate);
+  EEPROM.get(EEaddress + 4,timeRotate);
+  EEPROM.get(EEaddress + 8,tempMin);
+  EEPROM.get(EEaddress + 12,tempMax);
+  Serial.println(timeHoldRotate);
+}
+
